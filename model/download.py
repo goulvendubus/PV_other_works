@@ -519,12 +519,17 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     """
     Fetches radiation, temperature and wind data for the required PV station and dates.
     Maintains one persistent file per station and only fetches data for missing date ranges.
- 
-    If Ps is provided, solar zenith is computed (via pvlib) for every fetched period and
-    used to fill missing DNI values:
-      - Column entirely NaN (e.g. Kuopio has no DNI sensor): every row is filled.
-      - Column partially NaN: only gaps whose formula result falls within the
-        IQR-based logical range of the existing measured values are filled.
+
+    For each missing time range, this:
+      1. Downloads the FMI station data for that range (GHI, DHI, DNI sensor reading, etc).
+      2. Downloads the solar zenith angle for that same range via pvlib.
+      3. Computes DNI from GHI, DHI and zenith using pvlib.irradiance.dni, and uses it
+         to fill in the sensor's DNI column wherever the sensor reading is missing
+         (this is the normal case for stations like Kuopio, which has no DNI sensor
+         at all and reports DIR_PT1M_AVG as empty for every row).
+
+    This computation only ever runs on freshly fetched chunks, so previously cached
+    rows already on disk are left as-is and are not recomputed on every call.
  
     Returns the path to the station's data file.
     """
@@ -532,8 +537,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     import io
     import requests
     import numpy as np
-
-    Ps = 1.353e3 # W/m², solar constant used for DNI formula 
+    import pvlib
  
     station_ids = {
         "Helsinki": "101004",
@@ -621,6 +625,8 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     producer  = "observations_fmi"
     new_frames = []
  
+    lat_lon = station_coords.get(station_name)
+
     for range_start, range_end in missing_ranges:
         print(f"  Fetching {range_start} → {range_end}")
  
@@ -651,6 +657,50 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
             io.StringIO(response.text), sep=";", names=col_names, header=None
         )
         df_new["Dates"] = pd.to_datetime(df_new["Dates"], format="%Y%m%dT%H%M%S")
+
+        # ------------------------------------------------------------ #
+        #  Solar zenith + DNI for THIS range only                       #
+        # ------------------------------------------------------------ #
+        # The FMI sensor's DIR_PT1M_AVG (-> "FMI - DNI") column is empty
+        # for stations with no DNI sensor (e.g. Kuopio). For each newly
+        # fetched chunk, fetch the solar zenith angle for that same range
+        # via pvlib and use it to derive DNI from GHI/DHI wherever the
+        # sensor value is missing.
+        if lat_lon is not None:
+            lat, lon = lat_lon
+
+            times = pd.DatetimeIndex(df_new["Dates"])
+            times = times.tz_localize("UTC") if times.tz is None else times.tz_convert("UTC")
+
+            # --- Download solar zenith angle for this range (pvlib) ---
+            solar_position = pvlib.solarposition.get_solarposition(
+                time=times, latitude=lat, longitude=lon
+            )
+            zenith = pd.Series(solar_position["apparent_zenith"].values, index=df_new.index)
+
+            ghi = pd.to_numeric(df_new["FMI - GHI"], errors="coerce")
+            dhi = pd.to_numeric(df_new["FMI - DHI"], errors="coerce")
+            dni_sensor = pd.to_numeric(df_new["FMI - DNI"], errors="coerce")
+
+            # --- Compute DNI from GHI, DHI and solar zenith (pvlib) ---
+            dni_computed = pvlib.irradiance.dni(ghi=ghi, dhi=dhi, zenith=zenith)
+
+            # Night / very low sun or no irradiance → DNI is 0, not NaN/unreasonable
+            dni_computed[(zenith >= 90) | (ghi <= 0)] = 0.0
+            dni_computed = dni_computed.clip(lower=0)
+
+            # Only fill in where the sensor itself has no reading; keep real
+            # sensor measurements untouched where the station does have one.
+            df_new["FMI - DNI"] = dni_sensor.where(dni_sensor.notna(), dni_computed)
+
+            n_filled = dni_sensor.isna().sum()
+            if n_filled:
+                print(f"    DNI computed from GHI/DHI + solar zenith for {n_filled} row(s) "
+                      f"(no sensor reading at '{station_name}').")
+
+        elif station_name not in station_coords:
+            print(f"    No coordinates known for '{station_name}' — skipping DNI computation.")
+
         new_frames.append(df_new)
  
     if not new_frames:
@@ -675,63 +725,6 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         .sort_values("Dates")
         .reset_index(drop=True)
     )
- 
-    # ------------------------------------------------------------------ #
-    #  Solar position + DNI computation (pvlib-based, robust)
-    # ------------------------------------------------------------------ #
-    if station_name in station_coords:
-        import pvlib
-
-        lat, lon = station_coords[station_name]
-
-        # --- Build proper DatetimeIndex (UTC) ---
-        times = pd.DatetimeIndex(combined_df["Dates"])
-        if times.tz is None:
-            times = times.tz_localize("UTC")
-        else:
-            times = times.tz_convert("UTC")
-
-        # Attach index to dataframe (CRITICAL for alignment)
-        combined_df = combined_df.set_index(times)
-
-        # --- Compute solar position (aligned exactly to dataframe index) ---
-        # uses the standard dni formula: DNI = (GHI - DHI) / cos(zenith)
-        solar_position = pvlib.solarposition.get_solarposition(
-            time=combined_df.index,
-            latitude=lat,
-            longitude=lon
-        )
-
-        zenith = solar_position["apparent_zenith"]
-
-        # --- Ensure numeric irradiance inputs ---
-        ghi = pd.to_numeric(combined_df["FMI - GHI"], errors="coerce")
-        dhi = pd.to_numeric(combined_df["FMI - DHI"], errors="coerce")
-
-        # --- Compute DNI (physically consistent) ---
-        dni = pvlib.irradiance.dni(
-            ghi=ghi,
-            dhi=dhi,
-            zenith=zenith
-        )
-
-        # --- Clean up edge cases ---
-        # Night / very low sun → force DNI = 0
-        dni[(zenith >= 90) | (ghi <= 0)] = 0.0
-
-        # Remove negative / unrealistic values
-        dni = dni.clip(lower=0)
-
-        # --- Assign back safely ---
-        combined_df["FMI - DNI"] = dni
-
-        # Restore column-based structure (optional)
-        combined_df = combined_df.reset_index(drop=True)
-
-        print("  DNI computed from GHI/DHI + solar position (pvlib).")
-
-    else:
-        print(f"  No coordinates known for '{station_name}' — skipping DNI computation.")
  
     # ------------------------------------------------------------------ #
     #  Write back to file                                                  #
@@ -962,6 +955,3 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
  
     print(f"Updated: {filename} ({len(new_df)} new rows added, {len(combined_df)} total rows)")
     return filename
-
-
-
