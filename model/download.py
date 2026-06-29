@@ -1,3 +1,5 @@
+from matplotlib import dates
+
 from model.cache_utils import *
 from model.utils import *
 from datetime import datetime, timedelta
@@ -514,12 +516,11 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
                                         "WS_PT10M_AVG,"
                                         "WD_PT10M_AVG,"
                                         "SND_PT1M_INSTANT"),
-                        path = "", format: str = "csv",
-):
+                        path = "", format: str = "csv"):
     """
     Fetches radiation, temperature and wind data for the required PV station and dates.
     Maintains one persistent file per station and only fetches data for missing date ranges.
-
+ 
     For each missing time range, this:
       1. Downloads the FMI station data for that range (GHI, DHI, DNI sensor reading, etc).
       2. Downloads the solar zenith angle for that same range via pvlib.
@@ -527,7 +528,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
          to fill in the sensor's DNI column wherever the sensor reading is missing
          (this is the normal case for stations like Kuopio, which has no DNI sensor
          at all and reports DIR_PT1M_AVG as empty for every row).
-
+ 
     This computation only ever runs on freshly fetched chunks, so previously cached
     rows already on disk are left as-is and are not recomputed on every call.
  
@@ -536,8 +537,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     import os
     import io
     import requests
-    import numpy as np
-    import pvlib
+    from model.utils import compute_solar_zenith_and_dni
  
     station_ids = {
         "Helsinki": "101004",
@@ -546,6 +546,8 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         "Sodankyla":"101932",
         "Uto":      "100908"
     }
+ 
+    Ps = 1.353e3  # W/m², solar constant at 1 AU
  
     # (latitude, longitude) used for pvlib solar-position computation
     station_coords = {
@@ -606,108 +608,80 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
             existing_dates = set(existing_df["Dates"])
  
     # ------------------------------------------------------------------ #
-    #  Find missing date ranges                                            #
+    #  Decide what needs to happen                                         #
     # ------------------------------------------------------------------ #
     full_index         = pd.date_range(start=start, end=end, freq="1min")
     missing_timestamps = [ts for ts in full_index if ts not in existing_dates]
  
-    if not missing_timestamps:
+    # DNI fill is needed if Ps was provided and the existing file still has
+    # NaN DNI (e.g. it was cached before Ps support was added).
+    dni_needs_fill = (
+        Ps is not None
+        and station_name in station_coords
+        and existing_df is not None
+        and "FMI - DNI" in existing_df.columns
+        and existing_df["FMI - DNI"].isna().any()
+    )
+ 
+    if not missing_timestamps and not dni_needs_fill:
+        # Nothing to fetch and DNI is already filled — truly up to date.
         print("No missing data — file is already up to date.")
         return filename
  
-    missing_ranges = find_contiguous_day_ranges(sorted(missing_timestamps))
-    print(f"Fetching {len(missing_ranges)} missing range(s) for {station_name}...")
- 
     # ------------------------------------------------------------------ #
-    #  Fetch each missing range from the SmartMet API                     #
+    #  Fetch missing ranges (only if there are any)                        #
     # ------------------------------------------------------------------ #
-    base_url  = "http://smartmet.fmi.fi/timeseries"
-    producer  = "observations_fmi"
-    new_frames = []
+    new_df = pd.DataFrame()   # stays empty when only a DNI fill is needed
  
-    lat_lon = station_coords.get(station_name)
-
-    for range_start, range_end in missing_ranges:
-        print(f"  Fetching {range_start} → {range_end}")
+    if missing_timestamps:
+        missing_ranges = find_contiguous_day_ranges(sorted(missing_timestamps))
+        print(f"Fetching {len(missing_ranges)} missing range(s) for {station_name}...")
  
-        # Build the URL as a plain string so commas and (:31)-style sensor
-        # suffixes in `parameters` are NOT URL-encoded by requests.
-        url = (
-            f"{base_url}?"
-            f"producer={producer}"
-            f"&format=ascii"
-            f"&precision=double"
-            f"&separator=;"
-            f"&starttime={range_start.strftime('%Y%m%dT%H%M%S')}"
-            f"&endtime={range_end.strftime('%Y%m%dT%H%M%S')}"
-            f"&tz=UTC"
-            f"&timestep=1"          # ensures a complete 1-min series with no gaps
-            f"&fmisid={station_id}"
-            f"&param={parameters}"
-        )
+        base_url  = "http://smartmet.fmi.fi/timeseries"
+        producer  = "observations_fmi"
+        new_frames = []
  
-        response = requests.get(url)
-        response.raise_for_status()
+        for range_start, range_end in missing_ranges:
+            print(f"  Fetching {range_start} → {range_end}")
  
-        if not response.text.strip():
-            print(f"  No data returned for {range_start} → {range_end}, skipping.")
-            continue
- 
-        df_new = pd.read_csv(
-            io.StringIO(response.text), sep=";", names=col_names, header=None
-        )
-        df_new["Dates"] = pd.to_datetime(df_new["Dates"], format="%Y%m%dT%H%M%S")
-
-        # ------------------------------------------------------------ #
-        #  Solar zenith + DNI for THIS range only                       #
-        # ------------------------------------------------------------ #
-        # The FMI sensor's DIR_PT1M_AVG (-> "FMI - DNI") column is empty
-        # for stations with no DNI sensor (e.g. Kuopio). For each newly
-        # fetched chunk, fetch the solar zenith angle for that same range
-        # via pvlib and use it to derive DNI from GHI/DHI wherever the
-        # sensor value is missing.
-        if lat_lon is not None:
-            lat, lon = lat_lon
-
-            times = pd.DatetimeIndex(df_new["Dates"])
-            times = times.tz_localize("UTC") if times.tz is None else times.tz_convert("UTC")
-
-            # --- Download solar zenith angle for this range (pvlib) ---
-            solar_position = pvlib.solarposition.get_solarposition(
-                time=times, latitude=lat, longitude=lon
+            # Build URL as a plain string so commas and (:31)-style sensor
+            # suffixes in `parameters` are NOT URL-encoded by requests.
+            url = (
+                f"{base_url}?"
+                f"producer={producer}"
+                f"&format=ascii"
+                f"&precision=double"
+                f"&separator=;"
+                f"&starttime={range_start.strftime('%Y%m%dT%H%M%S')}"
+                f"&endtime={range_end.strftime('%Y%m%dT%H%M%S')}"
+                f"&tz=UTC"
+                f"&timestep=1"
+                f"&fmisid={station_id}"
+                f"&param={parameters}"
             )
-            zenith = pd.Series(solar_position["apparent_zenith"].values, index=df_new.index)
-
-            ghi = pd.to_numeric(df_new["FMI - GHI"], errors="coerce")
-            dhi = pd.to_numeric(df_new["FMI - DHI"], errors="coerce")
-            dni_sensor = pd.to_numeric(df_new["FMI - DNI"], errors="coerce")
-
-            # --- Compute DNI from GHI, DHI and solar zenith (pvlib) ---
-            dni_computed = pvlib.irradiance.dni(ghi=ghi, dhi=dhi, zenith=zenith)
-
-            # Night / very low sun or no irradiance → DNI is 0, not NaN/unreasonable
-            dni_computed[(zenith >= 90) | (ghi <= 0)] = 0.0
-            dni_computed = dni_computed.clip(lower=0)
-
-            # Only fill in where the sensor itself has no reading; keep real
-            # sensor measurements untouched where the station does have one.
-            df_new["FMI - DNI"] = dni_sensor.where(dni_sensor.notna(), dni_computed)
-
-            n_filled = dni_sensor.isna().sum()
-            if n_filled:
-                print(f"    DNI computed from GHI/DHI + solar zenith for {n_filled} row(s) "
-                      f"(no sensor reading at '{station_name}').")
-
-        elif station_name not in station_coords:
-            print(f"    No coordinates known for '{station_name}' — skipping DNI computation.")
-
-        new_frames.append(df_new)
  
-    if not new_frames:
-        print("API returned no new data.")
-        return filename
+            response = requests.get(url)
+            response.raise_for_status()
  
-    new_df = pd.concat(new_frames, ignore_index=True)
+            if not response.text.strip():
+                print(f"  No data returned for {range_start} → {range_end}, skipping.")
+                continue
+ 
+            df_new = pd.read_csv(
+                io.StringIO(response.text), sep=";", names=col_names, header=None
+            )
+            df_new["Dates"] = pd.to_datetime(df_new["Dates"], format="%Y%m%dT%H%M%S")
+            new_frames.append(df_new)
+ 
+        if new_frames:
+            new_df = pd.concat(new_frames, ignore_index=True)
+        else:
+            print("API returned no new data.")
+            if not dni_needs_fill:
+                return filename
+ 
+    elif dni_needs_fill:
+        print("No new data to fetch — re-opening existing file to apply DNI fill.")
  
     # ------------------------------------------------------------------ #
     #  Merge with existing data, sort, deduplicate                         #
@@ -715,9 +689,13 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     if existing_df is not None:
         if format == "csv" and {"fmisid", "stationname"}.issubset(existing_df.columns):
             existing_df = existing_df.drop(columns=["fmisid", "stationname"])
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        combined_df = (
+            pd.concat([existing_df, new_df], ignore_index=True)
+            if not new_df.empty
+            else existing_df.copy()
+        )
     else:
-        combined_df = new_df
+        combined_df = new_df.copy()
  
     combined_df = (
         combined_df
@@ -725,6 +703,49 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         .sort_values("Dates")
         .reset_index(drop=True)
     )
+ 
+    # ------------------------------------------------------------------ #
+    #  Solar zenith computation and DNI fill                               #
+    # ------------------------------------------------------------------ #
+    if Ps is not None and station_name in station_coords:
+        lat, lon = station_coords[station_name]
+ 
+        df_zenith    = compute_solar_zenith_and_dni(lat, lon, Ps, combined_df["Dates"])
+        computed_dni = df_zenith["computed_dni"].values
+ 
+        dni_col = "FMI - DNI"
+ 
+        if not combined_df[dni_col].notna().any():
+            # Entirely NaN (e.g. Kuopio): fill every row.
+            print(f"  DNI column is entirely NaN — filling all values from solar zenith formula.")
+            combined_df[dni_col] = computed_dni
+ 
+        else:
+            # Partial gaps: fill only NaN rows where the formula result is
+            # within the IQR-based logical range of existing measured values.
+            existing_vals = combined_df[dni_col].dropna()
+            q1, q3 = existing_vals.quantile(0.25), existing_vals.quantile(0.75)
+            iqr    = q3 - q1
+            lower  = max(0.0, q1 - 1.5 * iqr)
+            upper  = q3 + 1.5 * iqr
+ 
+            mask_nan     = combined_df[dni_col].isna()
+            mask_logical = (computed_dni >= lower) & (computed_dni <= upper)
+            fill_mask    = mask_nan & mask_logical
+ 
+            n_filled  = int(fill_mask.sum())
+            n_skipped = int(mask_nan.sum()) - n_filled
+            if n_filled > 0:
+                combined_df.loc[fill_mask, dni_col] = computed_dni[fill_mask]
+                print(f"  Filled {n_filled} partial DNI gap(s) within logical bounds "
+                      f"[{lower:.1f}, {upper:.1f}] W/m².")
+            if n_skipped > 0:
+                print(f"  Skipped {n_skipped} gap(s) outside logical bounds — left as NaN.")
+ 
+    elif Ps is None:
+        print("  Ps not provided — skipping solar zenith DNI fill.")
+    else:
+        print(f"  No coordinates known for '{station_name}' — skipping solar zenith DNI fill.")
  
     # ------------------------------------------------------------------ #
     #  Write back to file                                                  #
@@ -752,7 +773,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     #   TTECH_PT1M_AVG(:32) [deg C]: PV module temperature, NE corner
     #   TTECH_PT1M_AVG(:32) [deg C]: PV module temperature, SW corner
     #   TA_PT1M_AVG [deg C]:         2m air temperature at closeby weather station
-    #   RH_PT1M_AVG [%]:             Relative humidity at closeby weather station	
+    #   RH_PT1M_AVG [%]:             Relative humidity at closeby weather station
     # 10 minute values: 
     #   WS_PT10M_AVG [m/s]: 10m wind speed at closeby weather station 
     #   WD_PT10M_AVG [deg]: 10m wind direction at closeby weather station 
@@ -771,8 +792,10 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         save_df = combined_df.drop(columns=["fmisid", "stationname"], errors="ignore")
         save_df.to_csv(filename, index=False)
  
-    print(f"Updated: {filename} ({len(new_df)} new rows added, {len(combined_df)} total rows)")
+    n_new = len(new_df)
+    print(f"Updated: {filename} ({n_new} new rows added, {len(combined_df)} total rows)")
     return filename
+
 
 
 
@@ -955,3 +978,6 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
  
     print(f"Updated: {filename} ({len(new_df)} new rows added, {len(combined_df)} total rows)")
     return filename
+
+
+

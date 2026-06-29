@@ -77,7 +77,7 @@ def load_and_preprocess_cams_csv(
     """Convenience wrapper — composes the two above."""
     return preprocess_cams_df(load_cams_csv(filepath), output_path=output_path)
 
-def dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def dist(lat: float, long: float, lat2: float, lon2: float) -> float:
     """
     Calculates the distance in kilometers between two points on Earth specified by their latitude and longitude.
     Uses the Haversine formula to compute the great-circle distance.
@@ -98,6 +98,43 @@ def dist(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
 
     return R * c
+
+def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, times: pd.DatetimeIndex) -> pd.DataFrame:
+    """
+    Computes the solar zenith angle and direct normal irradiance (DNI) for given
+    latitude, longitude, times, and solar constant Ps.
+ 
+    Handles both tz-aware and tz-naive inputs by localising to UTC when needed.
+ 
+    Returns a DataFrame indexed by the (UTC) timestamps with columns:
+        'Dates'           – copy of the index
+        'apparent_zenith' – solar zenith angle in degrees
+        'computed_dni'    – DNI estimated via the simple Kasten formula (W/m²)
+    """
+    import pvlib
+    import numpy as np
+ 
+    # Ensure times is a UTC-aware DatetimeIndex so pvlib is happy
+    if not isinstance(times, pd.DatetimeIndex):
+        times = pd.DatetimeIndex(times)
+    if times.tz is None:
+        times = times.tz_localize("UTC")
+    else:
+        times = times.tz_convert("UTC")
+ 
+    df = pd.DataFrame(index=times)
+    df["Dates"] = df.index
+ 
+    solar_pos       = pvlib.solarposition.get_solarposition(times, lat, lon)
+    apparent_zenith = solar_pos["apparent_zenith"].values   # degrees
+ 
+    am           = np.where(apparent_zenith > 0, 1.0 / apparent_zenith, np.nan)
+    computed_dni = Ps * 0.7 ** (am ** 0.678)
+ 
+    df["apparent_zenith"] = apparent_zenith
+    df["computed_dni"]    = computed_dni
+    return df
+
 
 ##_________________csv utility functions____________________
 
