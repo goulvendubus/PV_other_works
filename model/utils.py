@@ -99,7 +99,7 @@ def dist(lat: float, long: float, lat2: float, lon2: float) -> float:
 
     return R * c
 
-def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, times: pd.DatetimeIndex) -> pd.DataFrame:
+def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, df: pd.DataFrame) -> pd.DataFrame:
     """
     Computes the solar zenith angle and direct normal irradiance (DNI) for given
     latitude, longitude, times, and solar constant Ps.
@@ -115,24 +115,45 @@ def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, times: pd.Da
     import numpy as np
  
     # Ensure times is a UTC-aware DatetimeIndex so pvlib is happy
-    if not isinstance(times, pd.DatetimeIndex):
-        times = pd.DatetimeIndex(times)
-    if times.tz is None:
-        times = times.tz_localize("UTC")
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.DatetimeIndex(df.index)
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
     else:
-        times = times.tz_convert("UTC")
+        df.index = df.index.tz_convert("UTC")
  
-    df = pd.DataFrame(index=times)
     df["Dates"] = df.index
  
-    solar_pos       = pvlib.solarposition.get_solarposition(times, lat, lon)
+    solar_pos       = pvlib.solarposition.get_solarposition(df.index, lat, lon)
     apparent_zenith = solar_pos["apparent_zenith"].values   # degrees
  
-    am           = np.where(apparent_zenith > 0, 1.0 / apparent_zenith, np.nan)
-    computed_dni = Ps * 0.7 ** (am ** 0.678)
+    computed_dni = np.where(apparent_zenith < 90, (df["FMI - GHI"] - df["FMI - DHI"]) / np.cos(np.radians(apparent_zenith)), 0.0)
  
     df["apparent_zenith"] = apparent_zenith
     df["computed_dni"]    = computed_dni
+    return df
+
+def align_to_common_day(df, ref_date="2021-01-01"):
+    df = df.copy()
+    ref_date = pd.Timestamp(ref_date)
+
+    # Use Dates column if it exists, otherwise fall back to index
+    if "Dates" in df.columns:
+        time_series = df["Dates"]
+    else:
+        time_series = df.index
+
+    df["aligned_time"] = pd.to_datetime(time_series).map(
+        lambda ts: pd.Timestamp(
+            year=ref_date.year,
+            month=ref_date.month,
+            day=ref_date.day,
+            hour=ts.hour,
+            minute=ts.minute,
+            second=ts.second
+        )
+    )
+
     return df
 
 
@@ -169,7 +190,7 @@ def csv_transform(source: str | pd.DataFrame, output_path=None) -> pd.DataFrame:
     """
     Used to create a pandas DataFrame from as .csv file
     """
-    df = pd.read_csv(source) if isinstance(source, (str, Path)) else source.copy()
+    df = pd.read_csv(source,parse_dates= ["Dates"]) if isinstance(source, (str, Path)) else source.copy()
     # ... transform logic
     if output_path:
         df.to_csv(output_path, index=False)
@@ -187,6 +208,37 @@ def write_df_to_csv(df: pd.DataFrame, output_path: str | Path, *, index: bool = 
     return output_path
 
 
+def format_df_for_pvfc(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Formats a DataFrame to be compatible with the PVForecasting class.
+ 
+    Renames FMI station columns to the names expected by the forecaster,
+    clamps all irradiance (and POA, if present) columns to >= 0, and
+    returns the result.  The function is intentionally permissive about
+    missing columns so that it works for stations that lack G_POA (e.g.
+    Kuopio).
+ 
+    Requires a DatetimeIndex.
+    """
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("DataFrame index must be a DatetimeIndex.")
+ 
+    df = df.copy()
+    df = df.rename(columns={
+        "FMI - GHI":         "ghi",
+        "FMI - DNI":         "dni",
+        "FMI - DHI":         "dhi",
+        "FMI - MODULE_TEMP": "module_temp",
+        "FMI - G_POA":       "poa_ref_cor",
+    })
+ 
+    # Clamp irradiance columns to zero; skip any that are absent (e.g. poa_ref_cor
+    # for stations without a tilted pyranometer).
+    for col in ["ghi", "dni", "dhi", "poa_ref_cor"]:
+        if col in df.columns:
+            df[col] = df[col].clip(lower=0)
+ 
+    return df
 
 
 

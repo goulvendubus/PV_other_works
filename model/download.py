@@ -608,7 +608,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
             existing_dates = set(existing_df["Dates"])
  
     # ------------------------------------------------------------------ #
-    #  Decide what needs to happen                                         #
+    #  Decide what needs to happen                                       #
     # ------------------------------------------------------------------ #
     full_index         = pd.date_range(start=start, end=end, freq="1min")
     missing_timestamps = [ts for ts in full_index if ts not in existing_dates]
@@ -703,14 +703,14 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         .sort_values("Dates")
         .reset_index(drop=True)
     )
- 
+
     # ------------------------------------------------------------------ #
     #  Solar zenith computation and DNI fill                               #
     # ------------------------------------------------------------------ #
     if Ps is not None and station_name in station_coords:
         lat, lon = station_coords[station_name]
  
-        df_zenith    = compute_solar_zenith_and_dni(lat, lon, Ps, combined_df["Dates"])
+        df_zenith    = compute_solar_zenith_and_dni(lat, lon, Ps, combined_df)
         computed_dni = df_zenith["computed_dni"].values
  
         dni_col = "FMI - DNI"
@@ -746,7 +746,15 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
         print("  Ps not provided — skipping solar zenith DNI fill.")
     else:
         print(f"  No coordinates known for '{station_name}' — skipping solar zenith DNI fill.")
- 
+    
+    
+    # ------------------------------------------------------------------ #
+    #  Mean module temperature                                             #
+    # ------------------------------------------------------------------ #
+    combined_df["FMI - MODULE_TEMP"] = combined_df[
+        ["FMI - SW_MODULE_TEMP", "FMI - NE_MODULE_TEMP"]
+    ].mean(axis=1, skipna=True)
+
     # ------------------------------------------------------------------ #
     #  Write back to file                                                  #
     # ------------------------------------------------------------------ #
