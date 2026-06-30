@@ -986,6 +986,3 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
  
     print(f"Updated: {filename} ({len(new_df)} new rows added, {len(combined_df)} total rows)")
     return filename
-
-
-
