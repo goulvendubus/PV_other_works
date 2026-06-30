@@ -101,37 +101,49 @@ def dist(lat: float, long: float, lat2: float, lon2: float) -> float:
 
 def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, df: pd.DataFrame) -> pd.DataFrame:
     """
-    Computes the solar zenith angle and direct normal irradiance (DNI) for given
-    latitude, longitude, times, and solar constant Ps.
- 
-    Handles both tz-aware and tz-naive inputs by localising to UTC when needed.
- 
-    Returns a DataFrame indexed by the (UTC) timestamps with columns:
-        'Dates'           – copy of the index
+    Computes the solar zenith angle and direct normal irradiance (DNI) for a
+    station DataFrame containing measured 'FMI - GHI' and 'FMI - DHI' columns.
+
+    DNI is derived from the closure equation DNI = (GHI - DHI) / cos(zenith),
+    then quality-controlled against the lower-bound threshold from Böök et al.
+    (2020); values falling below the threshold (or negative) are set to 0.
+
+    Handles both tz-aware and tz-naive 'Dates'/index inputs by localising to
+    UTC when needed.
+
+    Returns a DataFrame with columns:
+        'Dates'           – copy of the timestamps
         'apparent_zenith' – solar zenith angle in degrees
-        'computed_dni'    – DNI estimated via the simple Kasten formula (W/m²)
+        'computed_dni'    – DNI derived from the GHI/DHI closure formula, QC'd (W/m²)
     """
     import pvlib
     import numpy as np
- 
+
+    # Constants for the lower-bound QC threshold (note: Ps is unused by this
+    # closure-based formula, kept in the signature for call-site compatibility)
+    #Böök, Herman, Antti Poikonen, Antti Aarva, Tero Mielonen, Mikko R. A. Pitkänen, and Anders V. Lindfors. 
+    #“Photovoltaic System Modeling: A Validation Study at High Latitudes with Implementation of a Novel DNI Quality Control Method.” Solar Energy 204 (July 2020): 316–29. https://doi.org/10.1016/j.solener.2020.04.068.
+    A = -838.0
+    B = -0.112
+    C = 951
+
     # Ensure times is a UTC-aware DatetimeIndex so pvlib is happy
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.DatetimeIndex(df.index)
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC")
+    times = pd.DatetimeIndex(df["Dates"] if "Dates" in df.columns else df.index)
+    if times.tz is None:
+        times = times.tz_localize("UTC")
     else:
-        df.index = df.index.tz_convert("UTC")
+        times = times.tz_convert("UTC")
  
-    df["Dates"] = df.index
- 
-    solar_pos       = pvlib.solarposition.get_solarposition(df.index, lat, lon)
+    solar_pos       = pvlib.solarposition.get_solarposition(times, lat, lon)
     apparent_zenith = solar_pos["apparent_zenith"].values   # degrees
- 
+    
     computed_dni = np.where(apparent_zenith < 90, (df["FMI - GHI"] - df["FMI - DHI"]) / np.cos(np.radians(apparent_zenith)), 0.0)
+    computed_dni = np.where(computed_dni > A*np.exp(B*apparent_zenith) + C, 0.0, computed_dni)  # Böök et al. (2020) DNI QC threshold
  
-    df["apparent_zenith"] = apparent_zenith
-    df["computed_dni"]    = computed_dni
-    return df
+    df_new = df["Dates"].to_frame().copy() if "Dates" in df.columns else df.index.to_frame(name="Dates").copy()
+    df_new["apparent_zenith"] = apparent_zenith
+    df_new["computed_dni"]    = computed_dni
+    return df_new
 
 def align_to_common_day(df, ref_date="2021-01-01"):
     df = df.copy()
@@ -239,8 +251,3 @@ def format_df_for_pvfc(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].clip(lower=0)
  
     return df
-
-
-
-
-
