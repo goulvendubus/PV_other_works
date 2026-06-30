@@ -37,15 +37,10 @@ download_fmi_power_data("Kuopio", start=no_pollen_day2  )
 download_fmi_power_data("Kuopio", start=no_pollen_day3  )
 
 df = csv_transform("data/kuopio/fmi_power_data.csv")
-df_no_pollen1 = df[df["Dates"].str.match("2021-08-06")]
-df_no_pollen2 = df[df["Dates"].str.match("2021-04-21")]
-df_no_pollen3 = df[df["Dates"].str.match("2021-04-24")]
-df_pollen = df[df["Dates"].str.match("2021-05-12")]
-
-df_pollen["Dates"] = pd.to_datetime(df_pollen["Dates"])
-df_no_pollen1["Dates"] = pd.to_datetime(df_no_pollen1["Dates"])
-df_no_pollen2["Dates"] = pd.to_datetime(df_no_pollen2["Dates"])
-df_no_pollen3["Dates"] = pd.to_datetime(df_no_pollen3["Dates"])
+df_no_pollen1 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-08-06"]
+df_no_pollen2 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-04-21"]
+df_no_pollen3 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-04-24"]
+df_pollen = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-05-12"]
 
 df_pollen_aligned = align_to_common_day(df_pollen)
 df_no_pollen1_aligned = align_to_common_day(df_no_pollen1)
@@ -162,139 +157,137 @@ df_allsky_no_pollen3_mod = align_to_common_day(pvfc.process_radiation_df(format_
 
 
 
-# ##______________________________Plotting_____________________________________________________
-# fig = go.Figure()
+##______________________________Plotting_____________________________________________________
+fig = go.Figure()
 
-# fig.add_trace(go.Scatter(
-#     x=df_pollen_aligned["aligned_time"],
-#     y=df_pollen_aligned["In12Power[W]"],
-#     mode='lines',
-#     name=f'{pollen_day.date()} - Measured output (pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_clearsky_mod_pollen_aligned["aligned_time"],
-#     y=df_clearsky_mod_pollen_aligned["output"],
-#     mode='lines',
-#     name=f'{pollen_day.date()} - Clearsky FMI output modelization (pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_allsky_pollen_mod["aligned_time"],
-#     y=df_allsky_pollen_mod["output"],
-#     mode='lines',
-#     name=f'{pollen_day.date()} - Allsky FMI output modelization (pollen day)'
-# ))
-
-
-# fig.add_trace(go.Scatter(
-#     x=df_no_pollen1_aligned["aligned_time"],
-#     y=df_no_pollen1_aligned["In12Power[W]"],
-#     mode='lines',
-#     name=f'{no_pollen_day1.date()} - Measured output (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_clearsky_mod_no_pollen1_aligned["aligned_time"],
-#     y=df_clearsky_mod_no_pollen1_aligned["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day1.date()} - Clearsky FMI output modelization (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_allsky_no_pollen1_mod["aligned_time"],
-#     y=df_allsky_no_pollen1_mod["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day1.date()} - Allsky FMI output modelization (no pollen day)'
-# ))
+fig.add_trace(go.Scatter(
+    x=df_pollen_aligned["aligned_time"],
+    y=df_pollen_aligned["In12Power[W]"],
+    mode='lines',
+    name=f'{pollen_day.date()} - Measured output (pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_clearsky_mod_pollen_aligned["aligned_time"],
+    y=df_clearsky_mod_pollen_aligned["output"],
+    mode='lines',
+    name=f'{pollen_day.date()} - Clearsky FMI output modelization (pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_allsky_pollen_mod["aligned_time"],
+    y=df_allsky_pollen_mod["output"],
+    mode='lines',
+    name=f'{pollen_day.date()} - Allsky FMI output modelization (pollen day)'
+))
 
 
-# fig.add_trace(go.Scatter(
-#     x=df_no_pollen2_aligned["aligned_time"],
-#     y=df_no_pollen2_aligned["In12Power[W]"],
-#     mode='lines',
-#     name=f'{no_pollen_day2.date()} - Measured output (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_clearsky_mod_no_pollen2_aligned["aligned_time"],
-#     y=df_clearsky_mod_no_pollen2_aligned["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day2.date()} - Clearsky FMI output modelization (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_allsky_no_pollen2_mod["aligned_time"],
-#     y=df_allsky_no_pollen2_mod["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day2.date()} - Allsky FMI output modelization (no pollen day)'
-# ))
+fig.add_trace(go.Scatter(
+    x=df_no_pollen1_aligned["aligned_time"],
+    y=df_no_pollen1_aligned["In12Power[W]"],
+    mode='lines',
+    name=f'{no_pollen_day1.date()} - Measured output (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_clearsky_mod_no_pollen1_aligned["aligned_time"],
+    y=df_clearsky_mod_no_pollen1_aligned["output"],
+    mode='lines',
+    name=f'{no_pollen_day1.date()} - Clearsky FMI output modelization (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_allsky_no_pollen1_mod["aligned_time"],
+    y=df_allsky_no_pollen1_mod["output"],
+    mode='lines',
+    name=f'{no_pollen_day1.date()} - Allsky FMI output modelization (no pollen day)'
+))
 
 
-# fig.add_trace(go.Scatter(
-#     x=df_no_pollen3_aligned["aligned_time"],
-#     y=df_no_pollen3_aligned["In12Power[W]"],
-#     mode='lines',
-#     name=f'{no_pollen_day3.date()} - Measured output (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_clearsky_mod_no_pollen3_aligned["aligned_time"],
-#     y=df_clearsky_mod_no_pollen3_aligned["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day3.date()} - Clearsky FMI output modelization (no pollen day)'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=df_allsky_no_pollen3_mod["aligned_time"],
-#     y=df_allsky_no_pollen3_mod["output"],
-#     mode='lines',
-#     name=f'{no_pollen_day3.date()} - Allsky FMI output modelization (no pollen day)'
-# ))
+fig.add_trace(go.Scatter(
+    x=df_no_pollen2_aligned["aligned_time"],
+    y=df_no_pollen2_aligned["In12Power[W]"],
+    mode='lines',
+    name=f'{no_pollen_day2.date()} - Measured output (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_clearsky_mod_no_pollen2_aligned["aligned_time"],
+    y=df_clearsky_mod_no_pollen2_aligned["output"],
+    mode='lines',
+    name=f'{no_pollen_day2.date()} - Clearsky FMI output modelization (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_allsky_no_pollen2_mod["aligned_time"],
+    y=df_allsky_no_pollen2_mod["output"],
+    mode='lines',
+    name=f'{no_pollen_day2.date()} - Allsky FMI output modelization (no pollen day)'
+))
 
 
-# fig.update_layout(
-#     title="Power comparison (midnight to midnight)",
-#     xaxis_title="Time of day",
-#     yaxis_title="Power [W]",
-#     xaxis=dict(
-#         tickformat="%H:%M",
-#         dtick=2 * 60 * 60 * 1000  # 2 hours in milliseconds
-#     )
-# )
+fig.add_trace(go.Scatter(
+    x=df_no_pollen3_aligned["aligned_time"],
+    y=df_no_pollen3_aligned["In12Power[W]"],
+    mode='lines',
+    name=f'{no_pollen_day3.date()} - Measured output (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_clearsky_mod_no_pollen3_aligned["aligned_time"],
+    y=df_clearsky_mod_no_pollen3_aligned["output"],
+    mode='lines',
+    name=f'{no_pollen_day3.date()} - Clearsky FMI output modelization (no pollen day)'
+))
+fig.add_trace(go.Scatter(
+    x=df_allsky_no_pollen3_mod["aligned_time"],
+    y=df_allsky_no_pollen3_mod["output"],
+    mode='lines',
+    name=f'{no_pollen_day3.date()} - Allsky FMI output modelization (no pollen day)'
+))
 
-# fig.show()
 
+fig.update_layout(
+    title="Power comparison (midnight to midnight)",
+    xaxis_title="Time of day",
+    yaxis_title="Power [W]",
+    xaxis=dict(
+        tickformat="%H:%M",
+        dtick=2 * 60 * 60 * 1000  # 2 hours in milliseconds
+    )
+)
 
+fig.show()
 
 
 
-# ## Plotting difference between pollen and no pollen days
 
 
-# df_merged = pd.merge(
-#     df_pollen_aligned[["aligned_time", "In12Power[W]"]],
-#     df_no_pollen1_aligned[["aligned_time", "In12Power[W]"]],
-#     on="aligned_time",
-#     how="inner",
-#     suffixes=("_pollen", "_no_pollen")
-# )
-
-# # Compute difference
-# df_merged["diff"] = (
-#     df_merged["In12Power[W]_no_pollen"]
-#     - df_merged["In12Power[W]_pollen"]
-# )
+## Plotting difference between pollen and no pollen days
 
 
-# fig2 = go.Figure()
-# fig2.add_trace(go.Scatter(
-#     x=df_merged["aligned_time"],
-#     y=df_merged["diff"],
-#     mode='lines',
-#     name=f'Difference (No pollen ({no_pollen_day1.date()}) - Pollen ({pollen_day.date()}))'
-# ))
-# fig2.update_layout(
-#     title="Power difference (midnight to midnight)",
-#     xaxis_title="Time of day",
-#     yaxis_title="Power difference [W]",
-#     xaxis=dict(
-#         tickformat="%H:%M",
-#         dtick=2 * 60 * 60 * 1000
-#     )
-# )
-# fig2.show()
+df_merged = pd.merge(
+    df_pollen_aligned[["aligned_time", "In12Power[W]"]],
+    df_no_pollen1_aligned[["aligned_time", "In12Power[W]"]],
+    on="aligned_time",
+    how="inner",
+    suffixes=("_pollen", "_no_pollen")
+)
+
+# Compute difference
+df_merged["diff"] = (
+    df_merged["In12Power[W]_no_pollen"]
+    - df_merged["In12Power[W]_pollen"]
+)
 
 
+fig2 = go.Figure()
+fig2.add_trace(go.Scatter(
+    x=df_merged["aligned_time"],
+    y=df_merged["diff"],
+    mode='lines',
+    name=f'Difference (No pollen ({no_pollen_day1.date()}) - Pollen ({pollen_day.date()}))'
+))
+fig2.update_layout(
+    title="Power difference (midnight to midnight)",
+    xaxis_title="Time of day",
+    yaxis_title="Power difference [W]",
+    xaxis=dict(
+        tickformat="%H:%M",
+        dtick=2 * 60 * 60 * 1000
+    )
+)
+fig2.show()
