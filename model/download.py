@@ -17,9 +17,10 @@ from typing import List, Tuple
 # so each station's FMI, CAMS radiation, and CAMS environmental files end up
 # together under data/<slug>/
 STATION_SLUGS = {
-    "Helsinki Kumpula": "helsinki",
+    "Helsinki Kumpula": "kumpula",
     "Kuopio Savilahti": "kuopio",
-    "Sodenkylä Tähtelä": "sodankyla",
+    "Sodenkylä Tähtelä 90": "sodankyla90",
+    "Sodenkylä Tähtelä 20": "sodankyla20",
     "Parainen Utö": "uto",
 }
 
@@ -37,11 +38,15 @@ def _resolve_station_dir(station: str, base_path: str = "") -> str:
         slug = station.lower().replace(" ", "_")
 
     if base_path == "":
-        base_path = os.path.join(os.getcwd(), "data")
+        base_path = Path(__file__).resolve().parent.parent / "data"
+    else:
+        base_path = Path(base_path)
 
-    station_dir = os.path.join(base_path, slug)
-    os.makedirs(station_dir, exist_ok=True)
-    return station_dir
+    station_dir = base_path / slug
+    station_dir.mkdir(parents=True, exist_ok=True)
+
+    return str(station_dir)
+
 
 def _parse_cams_csv_body(data_str: str) -> pd.DataFrame:
     """
@@ -537,10 +542,10 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     import os
     import io
     import requests
-    from model.utils import compute_solar_zenith_and_dni
+
  
     station_ids = {
-        "Helsinki": "101004",
+        "Kumpula": "101004",
         "Turku":    "100949",
         "Kuopio":   "101586",
         "Sodankyla":"101932",
@@ -551,7 +556,7 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
  
     # (latitude, longitude) used for pvlib solar-position computation
     station_coords = {
-        "Helsinki":  (60.2058, 24.9610),
+        "Kumpula":  (60.2058, 24.9610),
         "Turku":     (60.5157, 22.2681),
         "Kuopio":    (62.8921, 27.6325),
         "Sodankyla": (67.3670, 26.6331),
@@ -595,17 +600,23 @@ def download_fmi_station_data(station: str, start: tuple | pd.Timestamp, end: tu
     existing_df    = None
     existing_dates = set()
  
-    if os.path.exists(filename):
+    if os.path.exists(filename) and os.path.getsize(filename) > 0:
         print(f"Found existing file: {filename}")
-        if format == "csv":
-            existing_df    = pd.read_csv(filename, parse_dates=["Dates"])
-            existing_dates = set(existing_df["Dates"])
-        else:
-            existing_df = pd.read_csv(
-                filename, sep=";", names=col_names, comment="#", header=None
-            )
-            existing_df["Dates"] = pd.to_datetime(existing_df["Dates"], format="%Y%m%dT%H%M%S")
-            existing_dates = set(existing_df["Dates"])
+        try:
+            if format == "csv":
+                existing_df    = pd.read_csv(filename, parse_dates=["Dates"])
+                existing_dates = set(existing_df["Dates"])
+            else:
+                existing_df = pd.read_csv(
+                    filename, sep=";", names=col_names, comment="#", header=None
+                )
+                existing_df["Dates"] = pd.to_datetime(existing_df["Dates"], format="%Y%m%dT%H%M%S")
+                existing_dates = set(existing_df["Dates"])
+        except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+            print(f"  Existing file is empty or unreadable ({e}) — treating as uninitialized.")
+            existing_df = None
+    elif os.path.exists(filename):
+        print(f"Found existing file: {filename}, but it is empty — treating as uninitialized.")
  
     # ------------------------------------------------------------------ #
     #  Decide what needs to happen                                       #
@@ -819,15 +830,18 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
     For Sodankyla, power measurements are split across two inverter subdirectories
     (pv350_11, pv350_12): both are fetched per day and their power columns are summed.
     """
+
+    """ for the moment, only the following stations are supported: Helsinki, Kuopio, Utö """
     import os
     import io
     import requests
  
     station_ids = {
-        "Helsinki": "101004",
+        "Kumpula": "101004",
         "Turku": "100949",
         "Kuopio": "101586",
-        "Sodankyla": "101932",
+        "Sodankyla90": "101932",
+        "Sodankyla20": "101932",
         "Uto": "100908"
     }
  
@@ -865,17 +879,23 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
     # Power columns summed across inverters for Sodankyla
     power_cols = [c for c in col_names if c not in ("Dates", "Count")]
  
-    # --- Load existing data if file exists ---
+    # --- Load existing data if file exists and is actually initialized ---
     existing_df = None
     existing_dates = set()
  
-    if os.path.exists(filename):
+    if os.path.exists(filename) and os.path.getsize(filename) > 0:
         print(f"Found existing file: {filename}")
-        if format == "csv":
-            existing_df = pd.read_csv(filename, parse_dates=["Dates"])
-        else:  # txt: semicolon-separated, no comment header
-            existing_df = pd.read_csv(filename, sep=";", parse_dates=["Dates"])
-        existing_dates = set(existing_df["Dates"].dt.date)
+        try:
+            if format == "csv":
+                existing_df = pd.read_csv(filename, parse_dates=["Dates"])
+            else:  # txt: semicolon-separated, no comment header
+                existing_df = pd.read_csv(filename, sep=";", parse_dates=["Dates"])
+            existing_dates = set(existing_df["Dates"].dt.date)
+        except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+            print(f"  Existing file is empty or unreadable ({e}) — treating as uninitialized.")
+            existing_df = None
+    elif os.path.exists(filename):
+        print(f"Found existing file: {filename}, but it is empty — treating as uninitialized.")
  
     # --- Determine which date ranges are missing ---
     # Check at day granularity: each source file covers exactly one calendar day
@@ -907,19 +927,31 @@ def download_fmi_power_data(station: str, start: tuple | pd.Timestamp, end: tupl
         day = range_start
         while day <= range_end:
             str_date = day.strftime("%Y%m%d")
-            print("str_date : ", str_date)                      # for debugging
-            #fname = f"sofar_{station_slug}_{str_date}.txt"
-            #print("file name : ", fname)                      # for debugging
-            
             day_frames = []
-
             for base_url in base_urls:
                 response = None
-
-                filenames = [
-                    f"sofar_{station_slug}_{str_date}.txt",
-                    f"trio20_{station_slug}_{str_date}.txt",
-                ]
+                if station_id == "101586":  # Kuopio: only one file per day, no subdirectories
+                    filenames = [
+                        f"sofar_{station_slug}_{str_date}.txt",
+                        f"trio20_{station_slug}_{str_date}.txt",
+                    ]
+                elif station_id == "101004":    # Helsinki: only one file per day, no subdirectories
+                    
+                    filenames = [
+                        f"trio20_{station_slug}_{str_date}.txt" if day <= datetime(2022,4,7).date() else f"sofar_{station_slug}_{str_date}.txt",
+                    ]
+                elif station_id == "100908":    # Utö: only one file per day, no subdirectories
+                    filenames = [
+                        f"fronius_{station_slug}_{str_date}.txt",
+                    ]
+                elif station_id == "101932":    # Sodankyla: two inverter subdirectories, each with one file per day
+                    raise ValueError("Sodankyla power data downloading not implemented yet.")
+                else:
+                    raise ValueError(
+                        f"Unrecognized station_id '{station_id}' for station '{station}'. "
+                        f"download_fmi_power_data only recognizes: {list(station_ids.keys())} "
+                        f"(or their numeric IDs: {list(station_ids.values())})."
+                    )
 
                 for fname in filenames:
                     url = f"{base_url}{fname}"

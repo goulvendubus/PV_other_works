@@ -136,9 +136,10 @@ def compute_solar_zenith_and_dni(lat: float, lon: float, Ps: float, df: pd.DataF
  
     solar_pos       = pvlib.solarposition.get_solarposition(times, lat, lon)
     apparent_zenith = solar_pos["apparent_zenith"].values   # degrees
-    
+    apparent_elevation = solar_pos["apparent_elevation"].values   # for the QC envelope
+
     computed_dni = np.where(apparent_zenith < 90, (df["FMI - GHI"] - df["FMI - DHI"]) / np.cos(np.radians(apparent_zenith)), 0.0)
-    computed_dni = np.where(computed_dni > A*np.exp(B*apparent_zenith) + C, 0.0, computed_dni)  # Böök et al. (2020) DNI QC threshold
+    computed_dni = np.where(computed_dni > A*np.exp(B*apparent_elevation) + C, 0.0, computed_dni)  # Böök et al. (2020) DNI QC threshold
  
     df_new = df["Dates"].to_frame().copy() if "Dates" in df.columns else df.index.to_frame(name="Dates").copy()
     df_new["apparent_zenith"] = apparent_zenith
@@ -202,11 +203,24 @@ def csv_transform(source: str | pd.DataFrame, output_path=None) -> pd.DataFrame:
     """
     Used to create a pandas DataFrame from as .csv file
     """
-    df = pd.read_csv(source,parse_dates= ["Dates"]) if isinstance(source, (str, Path)) else source.copy()
+    if isinstance(source, (str, Path)):
+        source_path = Path(source)
+        if not source_path.exists() or source_path.stat().st_size == 0:
+            raise ValueError(
+                f"'{source_path}' is missing or empty — no data was successfully "
+                f"downloaded/written for this file. This usually means the upstream "
+                f"download function found no data for the requested station/date range "
+                f"(check for 404s or an incorrect station slug in the fetch logs above), "
+                f"rather than a bug in csv_transform itself."
+            )
+        df = pd.read_csv(source_path, parse_dates=["Dates"])
+    else:
+        df = source.copy()
     # ... transform logic
     if output_path:
         df.to_csv(output_path, index=False)
     return df
+
 
 def write_df_to_csv(df: pd.DataFrame, output_path: str | Path, *, index: bool = False, sep: str = ",",
                     encoding: str = "utf-8", overwrite: bool = True ) -> Path:

@@ -10,9 +10,12 @@ import fmi_pv_forecaster as pvfc
 
 ##___Parameters___
 Ps = 1.353e3
+Stations = {"Kuopio": (62.892, 27.634), "Kumpula": (60.203071, 24.961305),}
 
+station_name = "Kumpula"
+latitude, longitude = Stations[station_name]
 
-pvfc.set_location(latitude=62.892, longitude=27.634)
+pvfc.set_location(latitude=latitude, longitude=longitude)
 pvfc.set_angles(15, 217)
 pvfc.set_module_elevation(95)
 pvfc.set_nominal_power_kw(20.28)
@@ -22,25 +25,25 @@ pvfc.set_default_albedo(0.15)
 
 
 
-pollen_day = pd.Timestamp("2021-05-12", tz="Europe/Helsinki")
-no_pollen_day1 = pd.Timestamp("2021-08-06", tz="Europe/Helsinki")
-no_pollen_day2 = pd.Timestamp("2021-04-21", tz="Europe/Helsinki")
-no_pollen_day3 = pd.Timestamp("2021-04-24", tz="Europe/Helsinki")
+pollen_day = pd.Timestamp("2022-05-12", tz="Europe/Helsinki")
+no_pollen_day1 = pd.Timestamp("2022-04-17", tz="Europe/Helsinki")
+no_pollen_day2 = pd.Timestamp("2022-04-21", tz="Europe/Helsinki")
+no_pollen_day3 = pd.Timestamp("2022-04-24", tz="Europe/Helsinki")
 
 
 
 
 ##_______________________________Direct power output data_____________________________________________________
-download_fmi_power_data("Kuopio", start=pollen_day)
-download_fmi_power_data("Kuopio", start=no_pollen_day1  )
-download_fmi_power_data("Kuopio", start=no_pollen_day2  )
-download_fmi_power_data("Kuopio", start=no_pollen_day3  )
+download_fmi_power_data(station_name, start=pollen_day)
+download_fmi_power_data(station_name, start=no_pollen_day1  )
+download_fmi_power_data(station_name, start=no_pollen_day2  )
+download_fmi_power_data(station_name, start=no_pollen_day3  )
 
-df = csv_transform("data/kuopio/fmi_power_data.csv")
-df_no_pollen1 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-08-06"]
-df_no_pollen2 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-04-21"]
-df_no_pollen3 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-04-24"]
-df_pollen = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2021-05-12"]
+df = csv_transform(f"data/{station_name.lower()}/fmi_power_data.csv")
+df_no_pollen1 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2022-04-17"]
+df_no_pollen2 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2022-04-21"]
+df_no_pollen3 = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2022-04-24"]
+df_pollen = df[df["Dates"].dt.strftime("%Y-%m-%d") == "2022-05-12"]
 
 df_pollen_aligned = align_to_common_day(df_pollen)
 df_no_pollen1_aligned = align_to_common_day(df_no_pollen1)
@@ -96,12 +99,12 @@ The data is filtered to keep only rows where every column that has data is non-n
 The relevant columns are renamed for consistency.
 The process_radiation_df function from fmi_pv_forecaster is used to process the radiation data, and the results are aligned to a common day for comparison.
 """
-download_fmi_station_data("Kuopio", start=pollen_day.tz_localize(None))
-download_fmi_station_data("Kuopio", start=no_pollen_day1.tz_localize(None))
-download_fmi_station_data("Kuopio", start=no_pollen_day2.tz_localize(None))
-download_fmi_station_data("Kuopio", start=no_pollen_day3.tz_localize(None))
+download_fmi_station_data(station_name, start=pollen_day.tz_localize(None))
+download_fmi_station_data(station_name, start=no_pollen_day1.tz_localize(None))
+download_fmi_station_data(station_name, start=no_pollen_day2.tz_localize(None))
+download_fmi_station_data(station_name, start=no_pollen_day3.tz_localize(None))
 
-df_env = csv_transform("data/kuopio/fmi_station_data.csv")
+df_env = csv_transform(f"data/{station_name.lower()}/fmi_station_data.csv")
 df_env["Dates"] = pd.to_datetime(df_env["Dates"])
 print("df_env après import\n", df_env.head())
 
@@ -135,10 +138,10 @@ df_env = df_env.dropna(subset=irr_cols)
 df_env = df_env.set_index("Dates")
 
 # Date filtering
-df_env_pollen = df_env[df_env.index.normalize() == pd.Timestamp("2021-05-12")]
-df_env_no_pollen1 = df_env[df_env.index.normalize() == pd.Timestamp("2021-08-06")]
-df_env_no_pollen2 = df_env[df_env.index.normalize() == pd.Timestamp("2021-04-21")]
-df_env_no_pollen3 = df_env[df_env.index.normalize() == pd.Timestamp("2021-04-24")]
+df_env_pollen = df_env[df_env.index.normalize() == pd.Timestamp("2022-05-12")]
+df_env_no_pollen1 = df_env[df_env.index.normalize() == pd.Timestamp("2022-04-17")]
+df_env_no_pollen2 = df_env[df_env.index.normalize() == pd.Timestamp("2022-04-21")]
+df_env_no_pollen3 = df_env[df_env.index.normalize() == pd.Timestamp("2022-04-24")]
 
 print("df_env après suppression des valeurs manquantes et négatives\n", df_env.head())
 print("Irradiance columns with data:", irr_cols)
@@ -241,7 +244,7 @@ fig.add_trace(go.Scatter(
 
 
 fig.update_layout(
-    title="Power comparison (midnight to midnight)",
+    title=f"Power comparison (midnight to midnight) for {station_name}",
     xaxis_title="Time of day",
     yaxis_title="Power [W]",
     xaxis=dict(
@@ -251,7 +254,8 @@ fig.update_layout(
 )
 
 fig.show()
-
+fig.write_html(f"plots/power_comparison_{station_name.lower()}.html")
+fig.write_image(f"plots/power_comparison_{station_name.lower()}.png", scale=2, width=1200, height=800)
 
 
 
@@ -259,35 +263,85 @@ fig.show()
 ## Plotting difference between pollen and no pollen days
 
 
-df_merged = pd.merge(
+df_merged_pollen = pd.merge(
     df_pollen_aligned[["aligned_time", "In12Power[W]"]],
-    df_no_pollen1_aligned[["aligned_time", "In12Power[W]"]],
+    df_allsky_pollen_mod[["aligned_time", "output"]],
     on="aligned_time",
     how="inner",
     suffixes=("_pollen", "_no_pollen")
 )
+df_merged_no_pollen1 = pd.merge(
+    df_no_pollen1_aligned[["aligned_time", "In12Power[W]"]],
+    df_allsky_no_pollen1_mod[["aligned_time", "output"]],
+    on="aligned_time",
+    how="inner",
+    suffixes=("_no_pollen1", "_no_pollen")
+)
+df_merged_no_pollen2 = pd.merge(
+    df_no_pollen2_aligned[["aligned_time", "In12Power[W]"]],
+    df_allsky_no_pollen2_mod[["aligned_time", "output"]],
+    on="aligned_time",
+    how="inner",
+    suffixes=("_no_pollen2", "_no_pollen")
+)
+df_merged_no_pollen3 = pd.merge(
+    df_no_pollen3_aligned[["aligned_time", "In12Power[W]"]],
+    df_allsky_no_pollen3_mod[["aligned_time", "output"]],
+    on="aligned_time",
+    how="inner",
+    suffixes=("_no_pollen3", "_no_pollen")
+)
 
 # Compute difference
-df_merged["diff"] = (
-    df_merged["In12Power[W]_no_pollen"]
-    - df_merged["In12Power[W]_pollen"]
+df_merged_pollen["diff"] = (
+    (df_merged_pollen["output"] - df_merged_pollen["In12Power[W]"]) / df_merged_pollen["output"]
+)
+df_merged_no_pollen1["diff"] = (
+    (df_merged_no_pollen1["output"] - df_merged_no_pollen1["In12Power[W]"]) / df_merged_no_pollen1["output"]
+)
+df_merged_no_pollen2["diff"] = (
+    (df_merged_no_pollen2["output"] - df_merged_no_pollen2["In12Power[W]"]) / df_merged_no_pollen2["output"]
+)
+df_merged_no_pollen3["diff"] = (
+    (df_merged_no_pollen3["output"] - df_merged_no_pollen3["In12Power[W]"]) / df_merged_no_pollen3["output"]
 )
 
 
 fig2 = go.Figure()
 fig2.add_trace(go.Scatter(
-    x=df_merged["aligned_time"],
-    y=df_merged["diff"],
+    x=df_merged_pollen["aligned_time"],
+    y=df_merged_pollen["diff"],
     mode='lines',
-    name=f'Difference (No pollen ({no_pollen_day1.date()}) - Pollen ({pollen_day.date()}))'
+    name= f"{pollen_day.date()} (pollen day)"
 ))
+fig2.add_trace(go.Scatter(
+    x=df_merged_no_pollen1["aligned_time"],
+    y=df_merged_no_pollen1["diff"],
+    mode='lines',
+    name= f"{no_pollen_day1.date()} (no pollen day)"
+))
+fig2.add_trace(go.Scatter(
+    x=df_merged_no_pollen2["aligned_time"],
+    y=df_merged_no_pollen2["diff"],
+    mode='lines',
+    name= f"{no_pollen_day2.date()} (no pollen day)"
+))
+fig2.add_trace(go.Scatter(
+    x=df_merged_no_pollen3["aligned_time"],
+    y=df_merged_no_pollen3["diff"],
+    mode='lines',
+    name= f"{no_pollen_day3.date()} (no pollen day)"
+))
+
 fig2.update_layout(
-    title="Power difference (midnight to midnight)",
+    title="Relative error (model - measured) / model",
     xaxis_title="Time of day",
-    yaxis_title="Power difference [W]",
+    yaxis_title="Relative error",
     xaxis=dict(
         tickformat="%H:%M",
         dtick=2 * 60 * 60 * 1000
     )
 )
 fig2.show()
+fig2.write_html(f"plots/relative_error_{station_name.lower()}.html")
+fig2.write_image(f"plots/relative_error_{station_name.lower()}.png", scale=2, width=1200, height=800)
